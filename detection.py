@@ -3,6 +3,8 @@ import numpy as np
 import threading
 import tempfile
 import os
+import subprocess
+import time
 from gtts import gTTS
 from ultralytics import YOLO
 import torch
@@ -15,6 +17,14 @@ print(f"Using device: {device}")
 # Load YOLO model
 model = YOLO("yolov8n.pt")
 model.to(device)
+
+# Frame decimation: only every N-th frame reaches the model (N = 3 by default).
+# main.py --object-n 1 sets N = 1 for the no-decimation baseline.
+DECIMATION_N = max(1, int(os.environ.get("VISIONMATE_DETECTION_N", "3")))
+
+# Optional log of processed frames, used for the processing rate in Table 2.
+# main.py --log-temperature sets this to <log name>_frames.csv.
+FRAME_LOG = os.environ.get("VISIONMATE_FRAME_LOG")
 
 # Prevent overlapping speech
 speech_lock = threading.Lock()
@@ -32,7 +42,7 @@ def text_to_speech(text):
         tts.save(file_path)
 
         # Use mpg123 instead of pygame (lighter)
-        os.system(f"mpg123 {file_path} > /dev/null 2>&1")
+        subprocess.run(["mpg123", "-q", file_path], check=False)
         os.remove(file_path)
 
 
@@ -45,6 +55,7 @@ def object_detection():
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     frame_count = 0
+    frame_log = open(FRAME_LOG, "a") if FRAME_LOG else None
 
     while True:
         ret, frame = cap.read()
@@ -53,12 +64,15 @@ def object_detection():
             break
 
         frame_count += 1
-        if frame_count % 3 != 0:
+        if frame_count % DECIMATION_N != 0:
             continue
 
         frame = cv2.resize(frame, (640, 480))
 
         results = model(frame, verbose=False)
+        if frame_log:
+            frame_log.write(f"{time.time():.3f}\n")
+            frame_log.flush()
 
         detected_objects = set()
 
@@ -101,6 +115,8 @@ def object_detection():
 
     cap.release()
     cv2.destroyAllWindows()
+    if frame_log:
+        frame_log.close()
 
 
 # ---------------- MAIN ---------------- #

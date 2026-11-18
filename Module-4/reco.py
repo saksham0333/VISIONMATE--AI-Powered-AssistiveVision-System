@@ -1,5 +1,6 @@
 import cv2
 import os
+import subprocess
 import sys
 import time
 import threading
@@ -33,7 +34,7 @@ def speak(text):
             tts.save(file_path)
 
             # Use mpg123 for lightweight playback
-            os.system(f"mpg123 {file_path} > /dev/null 2>&1")
+            subprocess.run(["mpg123", "-q", file_path], check=False)
 
             os.remove(file_path)
 
@@ -55,9 +56,8 @@ def live_face_recognition():
 
     cap = cv2.VideoCapture(0)
 
-    last_spoken_name = ""
-    last_spoken_time = 0
-    cooldown = 4  # seconds between speaking same name
+    last_spoken = {}   # name -> time it was last announced
+    cooldown = 4       # seconds before the same person is announced again (per identity)
 
     frame_count = 0
 
@@ -99,9 +99,9 @@ def live_face_recognition():
                         0.8,
                         (0, 255, 0), 2)
 
+            # Unknown faces are not announced; their embeddings are not kept.
             if name != "Unknown":
-                if name != last_spoken_name or \
-                   (current_time - last_spoken_time > cooldown):
+                if current_time - last_spoken.get(name, 0) > cooldown:
 
                     print("Recognized:", name)
 
@@ -111,8 +111,7 @@ def live_face_recognition():
                         daemon=True
                     ).start()
 
-                    last_spoken_name = name
-                    last_spoken_time = current_time
+                    last_spoken[name] = current_time
 
         cv2.imshow("Face Recognition", frame)
 

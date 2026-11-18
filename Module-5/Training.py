@@ -1,110 +1,143 @@
-import numpy as np 
-import pandas as pd 
-import matplotlib.pyplot as plt
-import cv2
-import tensorflow as tf
-from PIL import Image
+"""Train the traffic sign classifier of Section 4.5 on GTSRB (Sections 5.1 and 5.4).
+
+Network: 30 x 30 x 3 input; three convolutional blocks (32, 64, 128 filters,
+3 x 3, ReLU, batch normalisation, 2 x 2 max pooling); flatten; dense 128 ReLU;
+dropout 0.5; softmax over 43 classes. 165,355 parameters.
+Training: Adam, categorical cross-entropy, batch size 32, 15 epochs.
+
+Data: the Kaggle copy of GTSRB, with Train/<ClassId>/*.png. File names are
+<class>_<track>_<frame>.png; frames of one track show the same physical sign.
+
+    # random 80:20 split of the training set (the 96.5% figure in the paper)
+    python Module-5/Training.py --data /path/to/gtsrb --split random
+
+    # track-wise split: whole tracks are held out, so no sign is in both sets
+    python Module-5/Training.py --data /path/to/gtsrb --split track
+
+The model is saved without optimizer state to traffic_model.keras in the
+repository root (use --out to change), and the training curves (Figure 10)
+to results/traffic_sign/. Evaluate on the official test set with
+evaluation/eval_traffic_sign.py.
+"""
+
+import argparse
+import csv
 import os
-from sklearn.model_selection import train_test_split
-from keras.utils import to_categorical
-from keras.models import Sequential, load_model
-from keras.layers import Conv2D, MaxPool2D, Dense, Flatten, Dropout
+import sys
 
-data = []
-labels = []
-classes = 43
-cur_path = os.getcwd()
+import cv2
+import numpy as np
 
-#Retrieving the images and their labels 
-for i in range(classes):
-    path = os.path.join(cur_path,'train',str(i))
-    images = os.listdir(path)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
-    for a in images:
-        try:
-            image = Image.open(path + '\\'+ a)
-            image = image.resize((30,30))
-            image = np.array(image)
-            #sim = Image.fromarray(image)
-            data.append(image)
-            labels.append(i)
-        except:
-            print("Error loading image")
+NUM_CLASSES = 43
+IMG_SIZE = 30
 
-#Converting lists into numpy arrays
-data = np.array(data)
-labels = np.array(labels)
 
-print(data.shape, labels.shape)
-#Splitting training and testing dataset
-X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.2, random_state=42)
+def build_model():
+    from tensorflow.keras import layers, models
+    return models.Sequential([
+        layers.Input((IMG_SIZE, IMG_SIZE, 3)),
+        layers.Conv2D(32, (3, 3), activation='relu'), layers.BatchNormalization(), layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'), layers.BatchNormalization(), layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(128, (3, 3), activation='relu'), layers.BatchNormalization(), layers.MaxPooling2D((2, 2)),
+        layers.Flatten(),
+        layers.Dense(128, activation='relu'),
+        layers.Dropout(0.5),
+        layers.Dense(NUM_CLASSES, activation='softmax'),
+    ])
 
-print(X_train.shape, X_test.shape, y_train.shape, y_test.shape)
 
-#Converting the labels into one hot encoding
-y_train = to_categorical(y_train, 43)
-y_test = to_categorical(y_test, 43)
+def load_train_set(train_dir):
+    """Images as uint8 (BGR, 30 x 30), labels, and a track id per image."""
+    X, y, tracks = [], [], []
+    for class_id in range(NUM_CLASSES):
+        folder = os.path.join(train_dir, str(class_id))
+        if not os.path.isdir(folder):
+            sys.exit(f"Missing folder {folder}")
+        for name in sorted(os.listdir(folder)):
+            img = cv2.imread(os.path.join(folder, name))
+            if img is None:
+                continue
+            X.append(cv2.resize(img, (IMG_SIZE, IMG_SIZE)))
+            y.append(class_id)
+            parts = os.path.splitext(name)[0].split('_')
+            tracks.append(f"{class_id}_{parts[1]}" if len(parts) >= 3 else f"{class_id}_{name}")
+    return np.array(X), np.array(y), np.array(tracks)
 
-#Building the model
-model = Sequential()
-model.add(Conv2D(filters=32, kernel_size=(5,5), activation='relu', input_shape=X_train.shape[1:]))
-model.add(Conv2D(filters=32, kernel_size=(5,5), activation='relu'))
-model.add(MaxPool2D(pool_size=(2, 2)))
-model.add(Dropout(rate=0.25))
-model.add(Conv2D(filters=64, kernel_size=(3, 3), activation='relu'))
-model.add(Conv2D(filters=64, kernel_size=(3, 3), activation='relu'))
-model.add(MaxPool2D(pool_size=(2, 2)))
-model.add(Dropout(rate=0.25))
-model.add(Flatten())
-model.add(Dense(256, activation='relu'))
-model.add(Dropout(rate=0.5))
-model.add(Dense(43, activation='softmax'))
 
-#Compilation of the model
-model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+def save_without_optimizer(model, path):
+    """Save the trained weights in a fresh, uncompiled copy (no optimizer state)."""
+    clean = build_model()
+    clean.set_weights(model.get_weights())
+    clean.save(path)
 
-epochs = 15
-history = model.fit(X_train, y_train, batch_size=32, epochs=epochs, validation_data=(X_test, y_test))
-model.save("my_model.h5")
 
-#plotting graphs for accuracy 
-plt.figure(0)
-plt.plot(history.history['accuracy'], label='training accuracy')
-plt.plot(history.history['val_accuracy'], label='val accuracy')
-plt.title('Accuracy')
-plt.xlabel('epochs')
-plt.ylabel('accuracy')
-plt.legend()
-plt.show()
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--data', required=True, help='GTSRB root folder (contains Train/)')
+    ap.add_argument('--split', choices=['random', 'track'], default='random')
+    ap.add_argument('--val-fraction', type=float, default=0.2)
+    ap.add_argument('--epochs', type=int, default=15)
+    ap.add_argument('--batch-size', type=int, default=32)
+    ap.add_argument('--seed', type=int, default=42)
+    ap.add_argument('--out', default=os.path.join(ROOT, 'traffic_model.keras'))
+    ap.add_argument('--results', default=os.path.join(ROOT, 'results', 'traffic_sign'))
+    args = ap.parse_args()
 
-plt.figure(1)
-plt.plot(history.history['loss'], label='training loss')
-plt.plot(history.history['val_loss'], label='val loss')
-plt.title('Loss')
-plt.xlabel('epochs')
-plt.ylabel('loss')
-plt.legend()
-plt.show()
+    import tensorflow as tf
+    from sklearn.model_selection import GroupShuffleSplit, train_test_split
+    from tensorflow.keras.utils import to_categorical
 
-#testing accuracy on test dataset
-from sklearn.metrics import accuracy_score
+    tf.keras.utils.set_random_seed(args.seed)
+    X, y, tracks = load_train_set(os.path.join(args.data, 'Train'))
+    print(f"Loaded {len(X)} training images from {len(set(tracks))} tracks")
 
-y_test = pd.read_csv('Test.csv')
+    idx = np.arange(len(X))
+    if args.split == 'random':
+        tr, va = train_test_split(idx, test_size=args.val_fraction, random_state=args.seed)
+    else:
+        gss = GroupShuffleSplit(n_splits=1, test_size=args.val_fraction, random_state=args.seed)
+        tr, va = next(gss.split(idx, y, groups=tracks))
+        assert not set(tracks[tr]) & set(tracks[va])
 
-labels = y_test["ClassId"].values
-imgs = y_test["Path"].values
+    X = X.astype('float32') / 255.0   # same scaling as traffic_sign.preprocess
+    Y = to_categorical(y, NUM_CLASSES)
 
-data=[]
+    model = build_model()
+    print(f"Parameters: {model.count_params():,}")
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    hist = model.fit(X[tr], Y[tr], batch_size=args.batch_size, epochs=args.epochs,
+                     validation_data=(X[va], Y[va]), verbose=2)
 
-for img in imgs:
-    image = Image.open(img)
-    image = image.resize((30,30))
-    data.append(np.array(image))
+    save_without_optimizer(model, args.out)
+    print(f"Saved {args.out} ({os.path.getsize(args.out) / 1e6:.2f} MB)")
 
-X_test=np.array(data)
+    os.makedirs(args.results, exist_ok=True)
+    h = hist.history
+    with open(os.path.join(args.results, f'training_history_{args.split}.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['epoch', 'accuracy', 'val_accuracy', 'loss', 'val_loss'])
+        for e in range(len(h['loss'])):
+            w.writerow([e + 1, h['accuracy'][e], h['val_accuracy'][e], h['loss'][e], h['val_loss'][e]])
+    print(f"Final validation accuracy ({args.split} split): {100 * h['val_accuracy'][-1]:.1f}%")
 
-pred = model.predict_classes(X_test)
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
+        ep = range(1, len(h['loss']) + 1)
+        ax[0].plot(ep, h['accuracy'], label='training'); ax[0].plot(ep, h['val_accuracy'], label='validation')
+        ax[0].set_title('(a) Accuracy'); ax[0].set_xlabel('Epoch'); ax[0].legend()
+        ax[1].plot(ep, h['loss'], label='training'); ax[1].plot(ep, h['val_loss'], label='validation')
+        ax[1].set_title('(b) Categorical cross-entropy loss'); ax[1].set_xlabel('Epoch'); ax[1].legend()
+        fig.tight_layout()
+        fig.savefig(os.path.join(args.results, f'figure10_training_curves_{args.split}.png'), dpi=220)
+    except Exception as e:
+        print("Plot skipped:", e)
 
-#Accuracy with the test data
-from sklearn.metrics import accuracy_score
-print(accuracy_score(labels, pred))
+
+if __name__ == "__main__":
+    main()
