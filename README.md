@@ -1,5 +1,7 @@
 # VisionMate: Edge-Computed Wearable Assistive Vision System
 
+[![DOI](https://zenodo.org/badge/1209215688.svg)](https://doi.org/10.5281/zenodo.24335718)
+
 A wearable prototype for visually impaired people, built on a **Raspberry Pi 5**. It runs object detection, text reading (OCR), face recognition, traffic sign and traffic light classification, scene description (image captioning) and Indian Sign Language (ISL) recognition **on the device**, so no camera image leaves it, and speaks the result to the user. A separate **Arduino Uno R3** subsystem sends an SOS text message with GPS coordinates when the user presses a button, even if the Raspberry Pi has failed.
 
 This repository holds the code for the paper *"An edge-computed wearable system with on-device vision inference for text reading, object detection and sign language recognition for visually impaired people"* (Pundir, Kumar, Ralph A R and Pradhan, School of Electronics Engineering, VIT Chennai): the mode launcher and frame-decimation logic, the recognition modules, the Arduino firmware, and the training and evaluation scripts.
